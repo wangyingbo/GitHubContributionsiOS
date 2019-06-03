@@ -8,6 +8,11 @@ target 'GitHubContributions' do
   # Pods for GitHubContributions
 pod 'IQKeyboardManager'
 pod 'DateTools'
+pod 'Fabric'
+pod 'Crashlytics'
+pod "JazzHands"
+pod 'Masonry'
+pod 'Shimmer'
 end
 
 target 'TodayExtension' do
@@ -16,4 +21,12 @@ target 'TodayExtension' do
 
   # Pods for TodayExtension
 pod 'DateTools'
+pod 'Fabric'
+pod 'Crashlytics'
 end
+
+target 'ContributionsOnWatch Extension' do
+
+end
+
+plugin 'cocoapods-acknowledgements', :settings_bundle => true

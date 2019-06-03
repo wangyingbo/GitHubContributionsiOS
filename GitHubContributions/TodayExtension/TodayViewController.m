@@ -10,14 +10,16 @@
 #import <NotificationCenter/NotificationCenter.h>
 #import "JZCommitImageView.h"
 #import "JZCommitSceneView.h"
-
+#import <Fabric/Fabric.h>
+#import <Crashlytics/Crashlytics.h>
 #import "JZCommitManager.h"
+#import "JZHeader.h"
 
 @interface TodayViewController () <NCWidgetProviding>
 @property (weak, nonatomic) IBOutlet JZCommitImageView *commitImageView;
 @property (weak, nonatomic) IBOutlet JZCommitSceneView *commitSceneView;
 @property (weak, nonatomic) IBOutlet NSLayoutConstraint *commitImageViewTopConstraint;
-@property (weak, nonatomic) IBOutlet NSLayoutConstraint *commitSceneViewTopCinstraint;
+@property (weak, nonatomic) IBOutlet NSLayoutConstraint *commitSceneViewTopConstraint;
 @property (weak, nonatomic) IBOutlet UIButton *settingsButton;
 
 @end
@@ -32,6 +34,16 @@
     
     
 }
+
+- (id)initWithCoder:(NSCoder *)aDecoder
+{
+    self = [super initWithCoder:aDecoder];
+    if (self)
+    {
+        [Fabric with:@[CrashlyticsKit]];
+    }
+    return self;
+}
 #pragma mark - UI
 - (IBAction)goSettingsButtonPressed:(UIButton *)sender
 {
@@ -41,58 +53,75 @@
 
 - (void)viewWillAppear:(BOOL)animated
 {
-    _settingsButton.hidden = YES;
-    
-//     [[[NSUserDefaults alloc] initWithSuiteName:@"group.com.JustZht.GitHubContributions"] removeObjectForKey:@"GitHubContributionsArray"];
-//     [[[NSUserDefaults alloc] initWithSuiteName:@"group.com.JustZht.GitHubContributions"] removeObjectForKey:@"GitHubContributionsName"];
+    if (self.extensionContext.widgetActiveDisplayMode == NCWidgetDisplayModeCompact)
+    {
+        _commitImageView.alpha = 1.0f;
+        _commitSceneView.alpha = 0.0f;
+    }else
+    {
+        _commitImageView.alpha = 0.0f;
+        _commitSceneView.alpha = 1.0f;
+    }
+    [_settingsButton setTitle:@"" forState:UIControlStateNormal];
     
     NSMutableArray *weeks;
-    NSData *data = [[[NSUserDefaults alloc] initWithSuiteName:@"group.com.JustZht.GitHubContributions"]  objectForKey:@"GitHubContributionsArray"];
+    NSData *data = [[[NSUserDefaults alloc] initWithSuiteName:JZSuiteName]  objectForKey:@"GitHubContributionsArray"];
     if (data != nil)
     {
-        weeks = [NSKeyedUnarchiver unarchiveObjectWithData:data];
-        if (!weeks)
+        if (self.extensionContext.widgetActiveDisplayMode == NCWidgetDisplayModeCompact)
         {
-            NSLog(@"NSUserDefaults DO NOT HAVE weeks DATA");
+            [_commitImageView refreshData];
         }else
         {
-            NSLog(@"NSUserDefaults DO HAVE weeks DATA");
-            [_commitSceneView refreshFromCommits:weeks];
-            [_commitImageView refreshFromCommits:weeks];
+            [_commitSceneView refreshData];
         }
     }else
     {
-        NSLog(@"NSUserDefaults DO NOT HAVE DATA");
-         weeks = [[JZCommitManager sharedManager] refresh];
+        weeks = [[JZCommitManager sharedManager] refresh];
         if (!weeks)
         {
             [self showError];
             return;
         }
-        [_commitSceneView refreshFromCommits:weeks];
-        [_commitImageView refreshFromCommits:weeks];
-        
-        NSData *data = [NSKeyedArchiver archivedDataWithRootObject:weeks] ;
-        [[[NSUserDefaults alloc] initWithSuiteName:@"group.com.JustZht.GitHubContributions"] setObject:data forKey:@"GitHubContributionsArray"];
-        if ([[[NSUserDefaults alloc] initWithSuiteName:@"group.com.JustZht.GitHubContributions"] synchronize])
+        if (self.extensionContext.widgetActiveDisplayMode == NCWidgetDisplayModeCompact)
         {
-            NSLog(@"viewWillAppearDataTaskNewData");
+            [_commitImageView refreshData];
         }else
         {
-            NSLog(@"viewWillAppearDataTakskFailed");
+            [_commitSceneView refreshData];
+        }
+        
+        NSData *data = [NSKeyedArchiver archivedDataWithRootObject:weeks] ;
+        [[[NSUserDefaults alloc] initWithSuiteName:JZSuiteName] setObject:data forKey:@"GitHubContributionsArray"];
+        if ([[[NSUserDefaults alloc] initWithSuiteName:JZSuiteName] synchronize])
+        {
+            JZLog(@"viewWillAppearDataTaskNewData");
+        }else
+        {
+            JZLog(@"viewWillAppearDataTakskFailed");
         }
         
     }
+    
 }
 
 - (void)showError
 {
-    _settingsButton.hidden = NO;
+    [_settingsButton setTitle:@"Tap to set username" forState:UIControlStateNormal];
 }
 
 - (void)didReceiveMemoryWarning {
     [super didReceiveMemoryWarning];
-    // Dispose of any resources that can be recreated.
+
+    if (self.extensionContext.widgetActiveDisplayMode == NCWidgetDisplayModeCompact)
+    {
+        _commitSceneView.scene = nil;
+    }else
+    {
+        _commitImageView.image = nil;
+    }
+    [Answers logCustomEventWithName:@"com.JustZht.GitHubContributions.TodayExtension.MemoryWarning"
+                   customAttributes:@{}];
 }
 
 - (void)widgetPerformUpdateWithCompletionHandler:(void (^)(NCUpdateResult))completionHandler {
@@ -113,27 +142,37 @@
     if (activeDisplayMode == NCWidgetDisplayModeCompact)
     {
         self.preferredContentSize = maxSize;
-        _commitSceneViewTopCinstraint.constant = -210.0f;
-        [UIView animateWithDuration:0.2
+        _commitSceneViewTopConstraint.constant = -210.0f;
+        [UIView animateWithDuration:0.1
                          animations:^{
                              _commitImageView.alpha = 1.0f;
                              _commitSceneView.alpha = 0.0f;
                              [self.view layoutIfNeeded]; // Called on parent view
-                         }];
+                         } completion:^(BOOL finished)
+         {
+//             _commitSceneView.scene = nil;
+             [_commitImageView refreshData];
+         }];
     }
     else {
         self.preferredContentSize = CGSizeMake(0, 200.0);
-        _commitSceneViewTopCinstraint.constant = - 0.0;
-        [UIView animateWithDuration:0.2
+        _commitSceneViewTopConstraint.constant = - 0.0;
+        [UIView animateWithDuration:0.1
                          animations:^{
                              _commitImageView.alpha = 0.0f;
                              _commitSceneView.alpha = 1.0f;
                              [self.view layoutIfNeeded]; // Called on parent view
-                         }];
+                         }completion:^(BOOL finished)
+         {
+//             _commitImageView.image = nil;
+             [_commitSceneView refreshData];
+         }];
+
     }
 }
 - (UIEdgeInsets)widgetMarginInsetsForProposedMarginInsets:(UIEdgeInsets)defaultMarginInsets
 {
     return UIEdgeInsetsZero;
 }
+
 @end

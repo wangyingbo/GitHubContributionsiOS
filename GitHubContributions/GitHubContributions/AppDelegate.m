@@ -8,9 +8,19 @@
 
 #import "AppDelegate.h"
 #import "Reachability.h"
+#import <DateTools/NSDate+DateTools.h>
 #import "JZCommitManager.h"
+#import <WatchConnectivity/WatchConnectivity.h>
+#import "JZHeader.h"
+#import <Fabric/Fabric.h>
+#import "JZDataVisualizationManager.h"
+#import <Crashlytics/Crashlytics.h>
+#import <UserNotifications/UserNotifications.h>
+#import "JZNotificationManager.h"
+#import "JZIntroViewController.h"
+#import "JZAppSearchManager.h"
 
-@interface AppDelegate ()
+@interface AppDelegate ()<WCSessionDelegate,UNUserNotificationCenterDelegate>
 
 @property (nonatomic) Reachability *hostReachability;
 
@@ -20,25 +30,76 @@
 
 
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
-    // Override point for customization after application launch.
     
-    [[UIApplication sharedApplication] setMinimumBackgroundFetchInterval:UIApplicationBackgroundFetchIntervalMinimum];
+#if DEBUG
+    [[UIApplication sharedApplication] setMinimumBackgroundFetchInterval:900];
+#else
+    [Fabric with:@[[Crashlytics class],[Answers class]]];
+    [[UIApplication sharedApplication] setMinimumBackgroundFetchInterval:17280];
+#endif
     
+    if ([WCSession isSupported])
+    {
+        WCSession* session = [WCSession defaultSession];
+        session.delegate = self;
+        [session activateSession];
+    }
     
-    /*
-     Observe the kNetworkReachabilityChangedNotification. When that notification is posted, the method reachabilityChanged will be called.
-     */
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(reachabilityChanged:) name:kReachabilityChangedNotification object:nil];
-    //Change the host name here to change the server you want to monitor.
     NSString *remoteHostName = @"github.com";
     
     self.hostReachability = [Reachability reachabilityWithHostName:remoteHostName];
     [self.hostReachability startNotifier];
     [self updateInterfaceWithReachability:self.hostReachability];
     
+    // add refresh when launched
+    NSMutableArray * array = [[JZCommitManager sharedManager] refresh];
+    if (array)
+    {
+        [Answers logCustomEventWithName:@"com.JustZht.GitHubContributions.BackgroundFetch.Success"
+                       customAttributes:@{}];
+        NSData *data = [NSKeyedArchiver archivedDataWithRootObject:array] ;
+        [[[NSUserDefaults alloc] initWithSuiteName:JZSuiteName] setObject:data forKey:@"GitHubContributionsArray"];
+        
+        JZLog(@"UIBackgroundFetchResultNewData");
+        [self syncUserDefaultToWatch];
+        [[JZAppSearchManager sharedManager] updateAppSearchResult];
+    }
+    
+    [[UNUserNotificationCenter currentNotificationCenter] setDelegate:self];
+    [self HandleShortcutItems];
     return YES;
 }
 
+#pragma mark - Short Cuts
+- (void)HandleShortcutItems
+{
+    NSMutableArray *items = [NSMutableArray array];
+    if (![[JZCommitManager sharedManager] haveUserID])
+    {
+        UIApplicationShortcutItem *setUserNameItem = [[UIApplicationShortcutItem alloc]initWithType:@"Setup" localizedTitle:@"Setup"];
+        [items addObject:setUserNameItem];
+    }else if ([[JZCommitManager sharedManager] haveUserCommits])
+    {
+        UIApplicationShortcutItem *shareItem = [[UIApplicationShortcutItem alloc]initWithType:@"Share" localizedTitle:@"Share Graph"];
+        [items addObject:shareItem];
+    }else
+    {
+        
+    }
+    [[UIApplication sharedApplication] setShortcutItems:items];
+}
+- (void)application:(UIApplication *)application performActionForShortcutItem:(UIApplicationShortcutItem *)shortcutItem completionHandler:(void (^)(BOOL))completionHandler
+{
+    if ([shortcutItem.type isEqualToString:@"Setup"])
+    {
+        [(JZIntroViewController *)self.window.rootViewController showUserIDPage];
+    }
+    if ([shortcutItem.type isEqualToString:@"Share"])
+    {
+        [(JZIntroViewController *)self.window.rootViewController showShareSheet];
+    }
+}
 
 /*!
  * Called by Reachability whenever status changes.
@@ -56,13 +117,12 @@
     if (reachability == self.hostReachability)
     {
         NetworkStatus netStatus = [reachability currentReachabilityStatus];
-//        BOOL connectionRequired = [reachability connectionRequired];
+        //        BOOL connectionRequired = [reachability connectionRequired];
         
         switch (netStatus)
         {
             case NotReachable:
             {
-                
                 break;
             }
                 
@@ -83,49 +143,70 @@
 
 -(void)application:(UIApplication *)application performFetchWithCompletionHandler:(void (^)(UIBackgroundFetchResult))completionHandler
 {
+
+    [[NSUserDefaults standardUserDefaults] setObject:[NSDateFormatter localizedStringFromDate:[NSDate date] dateStyle:NSDateFormatterMediumStyle timeStyle:NSDateFormatterMediumStyle] forKey:@"com.JustZht.GitHubContributions.Bundle.Settings.LastFetchTimeTitle"];
+    
     NetworkStatus netStatus = [self.hostReachability currentReachabilityStatus];
     switch (netStatus)
     {
         case NotReachable:
         {
-            NSLog(@"NetworkStatus NotReachable");
-            NSLog(@"UIBackgroundFetchResultFailed");
-            completionHandler(UIBackgroundFetchResultFailed);
+            JZLog(@"NetworkStatus NotReachable");
+            JZLog(@"UIBackgroundFetchResultNoData");
+            completionHandler(UIBackgroundFetchResultNoData);
             return;
             break;
         }
         case ReachableViaWWAN:
         {
-            NSLog(@"NetworkStatus ReachableViaWWAN");
+            JZLog(@"NetworkStatus ReachableViaWWAN");
             break;
         }
         case ReachableViaWiFi:
         {
-            NSLog(@"NetworkStatus ReachableViaWiFi");
+            JZLog(@"NetworkStatus ReachableViaWiFi");
             break;
         }
     }
-
-//    NSMutableArray * oldArray = [[[NSUserDefaults alloc] initWithSuiteName:@"UYK8GY9WS7.group.com.JustZht.GitHubContributions"] objectForKey:@"GitHubContributionsArray"];
+    
+    
     NSMutableArray * array = [[JZCommitManager sharedManager] refresh];
     if (array)
     {
+        [Answers logCustomEventWithName:@"com.JustZht.GitHubContributions.BackgroundFetch.Success"
+                       customAttributes:@{}];
+        
+        [[JZNotificationManager sharedManager] triggerSuccessNotificationWithData:array];
+        
         NSData *data = [NSKeyedArchiver archivedDataWithRootObject:array] ;
-        [[[NSUserDefaults alloc] initWithSuiteName:@"group.com.JustZht.GitHubContributions"] setObject:data forKey:@"GitHubContributionsArray"];
-        if ([[[NSUserDefaults alloc] initWithSuiteName:@"group.com.JustZht.GitHubContributions"] synchronize])
-        {
-            NSLog(@"UIBackgroundFetchResultNewData");
-            completionHandler(UIBackgroundFetchResultNewData);
-        }else
-        {
-            NSLog(@"UIBackgroundFetchResultFailed");
-            completionHandler(UIBackgroundFetchResultFailed);
-        }
+        [[[NSUserDefaults alloc] initWithSuiteName:JZSuiteName] setObject:data forKey:@"GitHubContributionsArray"];
+        
+        [[NSUserDefaults standardUserDefaults] setObject:[NSDateFormatter localizedStringFromDate:[NSDate date] dateStyle:NSDateFormatterMediumStyle timeStyle:NSDateFormatterMediumStyle] forKey:@"com.JustZht.GitHubContributions.Bundle.Settings.LastSuccessFetchTimeTitle"];
+        
+        JZLog(@"UIBackgroundFetchResultNewData");
+        [self syncUserDefaultToWatch];
+        [self HandleShortcutItems];
+        [[JZAppSearchManager sharedManager] updateAppSearchResult];
+        completionHandler(UIBackgroundFetchResultNewData);
     }
     else
     {
-        NSLog(@"UIBackgroundFetchResultFailed");
-        completionHandler(UIBackgroundFetchResultFailed);
+        [Answers logCustomEventWithName:@"com.JustZht.GitHubContributions.BackgroundFetch.Fail"
+                       customAttributes:@{}];
+        
+        [[JZNotificationManager sharedManager] triggerFailedNotification];
+        
+        JZLog(@"UIBackgroundFetchResultNoData");
+        completionHandler(UIBackgroundFetchResultNoData);
+    }
+}
+
+- (void)syncUserDefaultToWatch
+{
+    WCSession* session = [WCSession defaultSession];
+    if ([session activationState] == WCSessionActivationStateActivated)
+    {
+        [session transferUserInfo:[[[NSUserDefaults alloc] initWithSuiteName:JZSuiteName] dictionaryRepresentation]];
     }
 }
 
@@ -139,6 +220,7 @@
 - (void)applicationDidEnterBackground:(UIApplication *)application {
     // Use this method to release shared resources, save user data, invalidate timers, and store enough application state information to restore your application to its current state in case it is terminated later.
     // If your application supports background execution, this method is called instead of applicationWillTerminate: when the user quits.
+     [self HandleShortcutItems];
 }
 
 
@@ -152,9 +234,31 @@
 }
 
 
-- (void)applicationWillTerminate:(UIApplication *)application {
+- (void)applicationWillTerminate:(UIApplication *)application
+{
     // Called when the application is about to terminate. Save data if appropriate. See also applicationDidEnterBackground:.
 }
 
+#pragma mark - Notification
+- (void)userNotificationCenter:(UNUserNotificationCenter *)center
+didReceiveNotificationResponse:(UNNotificationResponse *)response
+         withCompletionHandler:(void (^)(void))completionHandler
+{
+    if ([response.actionIdentifier isEqualToString:@"shareCommits"])
+    {        
+        [(JZIntroViewController *)self.window.rootViewController showShareSheet];
+    }
+    completionHandler();
+}
+
+#pragma mark - WCSessionDelegate
+- (void)session:(WCSession *)session activationDidCompleteWithState:(WCSessionActivationState)activationState error:(NSError *)error
+{
+    [self syncUserDefaultToWatch];
+}
+- (void)sessionDidBecomeInactive:(WCSession *)session
+{}
+- (void)sessionDidDeactivate:(WCSession *)session
+{}
 
 @end
